@@ -188,7 +188,7 @@ def get_vector_store() -> Chroma:
     )
 
     # 컬렉션이 비어 있을 때만 샘플 데이터 삽입
-    if vector_store._collection.count() == 0:
+    if len(vector_store.get(limit=1)["ids"]) == 0:
         print(f"[ChromaDB] 샘플 한국어 표현 {len(KOREAN_PHRASES)}개를 초기 로드합니다...")
         vector_store.add_documents(KOREAN_PHRASES)
 

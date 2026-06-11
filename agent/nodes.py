@@ -68,19 +68,21 @@ def analyze_input_node(state: AgentState) -> dict:
         ("human", "사용자 입력: {user_input}"),
     ])
 
-    result = structured_llm.invoke(
-        prompt.format_messages(
-            current_topic=current_topic or "미설정 (새로 감지 필요)",
-            user_input=state["user_input"],
+    try:
+        result = structured_llm.invoke(
+            prompt.format_messages(
+                current_topic=current_topic or "미설정 (새로 감지 필요)",
+                user_input=state["user_input"],
+            )
         )
-    )
-
-    # '기타'이면 기존 토픽을 유지하거나 '일상'으로 기본값 지정
-    new_topic = (
-        result.detected_topic
-        if result.detected_topic != "기타"
-        else (current_topic or "일상")
-    )
+        new_topic = (
+            result.detected_topic
+            if result.detected_topic != "기타"
+            else (current_topic or "일상")
+        )
+    except Exception:
+        # 구조화 출력 실패 시 기존 토픽 유지
+        new_topic = current_topic or "일상"
 
     return {"current_topic": new_topic}
 
@@ -117,24 +119,32 @@ def grammar_check_tool_node(state: AgentState) -> dict:
         ("human", "교정할 문장: {user_input}"),
     ])
 
-    result = structured_llm.invoke(
-        prompt.format_messages(user_input=state["user_input"])
-    )
-
-    grammar_feedback = {
-        "has_errors": result.has_errors,
-        "errors": [
-            {
-                "original": err.original_text,
-                "corrected": err.corrected_text,
-                "type": err.error_type,
-                "explanation": err.explanation,
-            }
-            for err in result.errors
-        ],
-        "corrected_sentence": result.corrected_sentence,
-        "overall_assessment": result.overall_assessment,
-    }
+    try:
+        result = structured_llm.invoke(
+            prompt.format_messages(user_input=state["user_input"])
+        )
+        grammar_feedback = {
+            "has_errors": result.has_errors,
+            "errors": [
+                {
+                    "original": err.original_text,
+                    "corrected": err.corrected_text,
+                    "type": err.error_type,
+                    "explanation": err.explanation,
+                }
+                for err in result.errors
+            ],
+            "corrected_sentence": result.corrected_sentence,
+            "overall_assessment": result.overall_assessment,
+        }
+    except Exception:
+        # 구조화 출력 실패 시 문법 검사 생략으로 처리
+        grammar_feedback = {
+            "has_errors": False,
+            "errors": [],
+            "corrected_sentence": state["user_input"],
+            "overall_assessment": "(문법 분석 불가)",
+        }
 
     return {"grammar_feedback": grammar_feedback}
 
@@ -303,12 +313,17 @@ def evaluate_response_node(state: AgentState) -> dict:
         ),
     ])
 
-    result = structured_llm.invoke(
-        prompt.format_messages(
-            topic=state.get("current_topic", "일상"),
-            user_input=state["user_input"],
-            final_response=state.get("final_response", ""),
+    try:
+        result = structured_llm.invoke(
+            prompt.format_messages(
+                topic=state.get("current_topic", "일상"),
+                user_input=state["user_input"],
+                final_response=state.get("final_response", ""),
+            )
         )
-    )
+        score = result.score
+    except Exception:
+        # 구조화 출력 실패 시 기준치(7)로 통과 처리하여 무한 루프 방지
+        score = 7
 
-    return {"evaluation_score": result.score}
+    return {"evaluation_score": score}

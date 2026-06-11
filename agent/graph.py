@@ -38,39 +38,31 @@ from agent.state import AgentState
 
 load_dotenv()
 
-# 환경 변수에서 품질 기준값 로드 (기본: 7점 / 최대 재시도: 3회)
-QUALITY_THRESHOLD: int = int(os.getenv("QUALITY_THRESHOLD", "7"))
-MAX_RETRIES: int = int(os.getenv("MAX_RETRIES", "3"))
-
-
-def _route_after_evaluation(state: AgentState) -> str:
-    """
-    Conditional Edge 라우팅 함수.
-
-    - 평가 점수가 기준치 미만이고 재시도 횟수가 MAX_RETRIES 미만이면
-      "retry" → rag_retrieve_node로 돌아가 다른 키워드로 재검색.
-    - 그 외에는 "end" → 그래프 종료.
-    """
-    score = state.get("evaluation_score", 0)
-    retry_count = state.get("retry_count", 0)
-
-    if score < QUALITY_THRESHOLD and retry_count < MAX_RETRIES:
-        print(
-            f"  [평가] {score}/10점 — 기준 미달, "
-            f"RAG 재검색 ({retry_count}/{MAX_RETRIES}회차)"
-        )
-        return "retry"
-
-    print(f"  [평가] {score}/10점 — 기준 통과, 응답 완료")
-    return "end"
-
-
 def build_graph():
     """
     StateGraph를 구성하고 컴파일한 실행 가능한 그래프를 반환.
 
     노드 등록 → 선형 엣지 연결 → 조건부 엣지(루프) 설정 → 컴파일
     """
+    # 호출 시점에 환경 변수를 읽어 테스트·런타임 변경이 즉시 반영되도록 함
+    quality_threshold = int(os.getenv("QUALITY_THRESHOLD", "7"))
+    max_retries = int(os.getenv("MAX_RETRIES", "3"))
+
+    def _route_after_evaluation(state: AgentState) -> str:
+        """품질 기준을 클로저로 캡처하여 build_graph() 시점의 설정을 사용."""
+        score = state.get("evaluation_score", 0)
+        retry_count = state.get("retry_count", 0)
+
+        if score < quality_threshold and retry_count < max_retries:
+            print(
+                f"  [평가] {score}/10점 — 기준 미달, "
+                f"RAG 재검색 ({retry_count}/{max_retries}회차)"
+            )
+            return "retry"
+
+        print(f"  [평가] {score}/10점 — 기준 통과, 응답 완료")
+        return "end"
+
     graph = StateGraph(AgentState)
 
     # ── 노드 등록 ──────────────────────────────────────────────────
