@@ -54,7 +54,9 @@ def analyze_input_node(state: AgentState) -> dict:
     prompt = ChatPromptTemplate.from_messages([
         (
             "system",
-            """당신은 한국어 회화 토픽 분석 전문가입니다.
+            """[중요] 당신은 반드시 한국어로만 답변해야 합니다. 영어, 중국어 등 다른 언어는 절대 사용하지 마세요.
+
+당신은 한국어 회화 토픽 분석 전문가입니다.
 사용자의 입력을 분석하여 가장 적합한 대화 주제를 선택하세요.
 
 선택 가능한 토픽: 여행, 일상, 취미, 음식, 날씨, 직업, 가족, 기타
@@ -63,9 +65,7 @@ def analyze_input_node(state: AgentState) -> dict:
 규칙:
 - 현재 토픽과 관련된 내용이면 그 토픽을 유지하세요.
 - 명확히 다른 주제로 전환되는 경우에만 새 토픽을 선택하세요.
-- 현재 토픽이 없다면 입력에서 가장 적합한 토픽을 선택하세요.
-
-반드시 한국어로만 답변하세요.""",
+- 현재 토픽이 없다면 입력에서 가장 적합한 토픽을 선택하세요.""",
         ),
         ("human", "사용자 입력: {user_input}"),
     ])
@@ -106,7 +106,9 @@ def grammar_check_tool_node(state: AgentState) -> dict:
     prompt = ChatPromptTemplate.from_messages([
         (
             "system",
-            """당신은 전문 한국어 문법 교정 교사입니다.
+            """[중요] 당신은 반드시 한국어로만 답변해야 합니다. 영어, 중국어 등 다른 언어는 절대 사용하지 마세요.
+
+당신은 전문 한국어 문법 교정 교사입니다.
 사용자의 한국어 문장을 꼼꼼히 분석하여 문법 오류를 찾고 교정해 주세요.
 
 검사 항목:
@@ -116,9 +118,7 @@ def grammar_check_tool_node(state: AgentState) -> dict:
 4. 어순
 5. 어색한 표현 (더 자연스러운 대안 제시)
 
-오류가 없다면 has_errors=false로, 잘 쓴 문장임을 긍정적으로 평가하세요.
-
-반드시 한국어로만 답변하세요.""",
+오류가 없다면 has_errors=false로, 잘 쓴 문장임을 긍정적으로 평가하세요.""",
         ),
         ("human", "교정할 문장: {user_input}"),
     ])
@@ -235,7 +235,9 @@ def generate_response_node(state: AgentState) -> dict:
     prompt = ChatPromptTemplate.from_messages([
         (
             "system",
-            """당신은 친절하고 격려적인 한국어 회화 튜터입니다.
+            """[중요] 당신은 반드시 한국어로만 답변해야 합니다. 영어, 중국어 등 다른 언어는 절대 사용하지 마세요.
+
+당신은 친절하고 격려적인 한국어 회화 튜터입니다.
 학습자가 자신감을 갖도록 항상 따뜻하고 긍정적인 말투로 피드백을 제공하세요.
 
 응답 형식 (반드시 아래 순서로 작성):
@@ -245,9 +247,7 @@ def generate_response_node(state: AgentState) -> dict:
 4. 대화를 이어나가는 꼬리 질문 하나
 
 말투 규칙: 친근한 존댓말 (예: ~해요, ~네요, ~어요)
-현재 대화 토픽: {topic}
-
-반드시 한국어로만 답변하세요.""",
+현재 대화 토픽: {topic}""",
         ),
         (
             "human",
@@ -296,7 +296,9 @@ def evaluate_response_node(state: AgentState) -> dict:
     prompt = ChatPromptTemplate.from_messages([
         (
             "system",
-            """당신은 한국어 교육 품질 평가 전문가입니다.
+            """[중요] 당신은 반드시 한국어로만 답변해야 합니다. 영어, 중국어 등 다른 언어는 절대 사용하지 마세요.
+
+당신은 한국어 교육 품질 평가 전문가입니다.
 튜터 응답이 아래 기준에 얼마나 부합하는지 1~10점으로 평가하세요.
 
 평가 기준:
@@ -305,9 +307,7 @@ def evaluate_response_node(state: AgentState) -> dict:
 3. 교육적 가치 (2점): 새로운 표현이나 예문이 포함되어 있는가?
 4. 대화 연속성 (2점): 꼬리 질문이 자연스럽게 대화를 이어가는가?
 
-7점 이상: 품질 통과 / 7점 미만: 개선 또는 추가 맥락 필요
-
-반드시 한국어로만 답변하세요.""",
+7점 이상: 품질 통과 / 7점 미만: 개선 또는 추가 맥락 필요""",
         ),
         (
             "human",
