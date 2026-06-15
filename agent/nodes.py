@@ -2,9 +2,11 @@
 각 LangGraph 노드의 실행 로직을 담은 모듈.
 
 노드 실행 순서:
-  analyze_input → grammar_check → rag_retrieve → generate_response → evaluate_response
-  └────────────────────────────────────────────────────────────────────┘
-                      (점수 미달 시 rag_retrieve로 루프백)
+  analyze_input → decide_next → (grammar_check →) rag_retrieve → generate_response → evaluate_response
+                                  ↘ rag_retrieve ↗
+                                  ↘ generate_response ↗
+                └────────────────────────────────────────────────────────┘
+                              (점수 미달 시 rag_retrieve로 루프백)
 """
 
 import os
@@ -25,11 +27,10 @@ load_dotenv()
 # ──────────────────────────────────────────────
 
 def _get_llm(temperature: float = 0.7) -> ChatOpenAI:
-    """Ollama OpenAI 호환 엔드포인트를 사용하는 LLM 인스턴스를 반환."""
+    """OpenAI 공식 엔드포인트를 사용하는 LLM 인스턴스를 반환."""
     return ChatOpenAI(
-        base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
-        api_key=os.getenv("OLLAMA_API_KEY", "ollama"),
-        model=os.getenv("OLLAMA_MODEL", "qwen2.5:7b-instruct"),
+        api_key=os.getenv("OPENAI_API_KEY"),
+        model=os.getenv("OPENAI_MODEL", "gpt-4o"),
         temperature=temperature,
     )
 
@@ -83,14 +84,65 @@ def analyze_input_node(state: AgentState) -> dict:
             else (current_topic or "일상")
         )
     except Exception:
-        # 구조화 출력 실패 시 기존 토픽 유지
         new_topic = current_topic or "일상"
 
     return {"current_topic": new_topic}
 
 
 # ──────────────────────────────────────────────
-# Node 2: grammar_check_tool_node
+# Node 2: decide_next_node
+# ──────────────────────────────────────────────
+
+def decide_next_node(state: AgentState) -> dict:
+    """
+    LLM이 사용자 입력을 보고 다음에 실행할 노드를 결정한다.
+
+    판단 기준:
+    - 문법 오류가 의심되면 → "grammar_check"
+    - 토픽 관련 표현이 필요하면 → "rag_retrieve"
+    - 간단한 인사나 단답이면 → "generate_response"
+    - 판단이 어려우면 → "grammar_check" (기본값)
+    반환: next_action (노드 이름)
+    """
+    llm = _get_llm(temperature=0.1)
+
+    prompt = ChatPromptTemplate.from_messages([
+        (
+            "system",
+            """[중요] 당신은 반드시 한국어로만 답변해야 합니다. 영어, 중국어 등 다른 언어는 절대 사용하지 마세요.
+
+당신은 한국어 회화 튜터링 파이프라인의 라우터입니다.
+사용자 입력을 분석하여 다음에 실행할 작업 이름을 결정하세요.
+
+판단 기준:
+- 문법 오류가 의심되면 → grammar_check
+- 특정 토픽 관련 자연스러운 표현이 필요하면 → rag_retrieve
+- 간단한 인사, 단답, 또는 문법·표현 지도가 불필요한 경우 → generate_response
+- 판단이 어려우면 → grammar_check (기본값)
+
+반드시 아래 세 값 중 하나만 정확히 출력하세요. 다른 텍스트는 포함하지 마세요:
+grammar_check
+rag_retrieve
+generate_response""",
+        ),
+        ("human", "사용자 입력: {user_input}"),
+    ])
+
+    try:
+        response = llm.invoke(
+            prompt.format_messages(user_input=state["user_input"])
+        )
+        next_action = response.content.strip().strip('"').strip("'")
+        if next_action not in ("grammar_check", "rag_retrieve", "generate_response"):
+            next_action = "grammar_check"
+    except Exception:
+        next_action = "grammar_check"
+
+    return {"next_action": next_action}
+
+
+# ──────────────────────────────────────────────
+# Node 3: grammar_check_tool_node
 # ──────────────────────────────────────────────
 
 def grammar_check_tool_node(state: AgentState) -> dict:
@@ -142,7 +194,6 @@ def grammar_check_tool_node(state: AgentState) -> dict:
             "overall_assessment": result.overall_assessment,
         }
     except Exception:
-        # 구조화 출력 실패 시 문법 검사 생략으로 처리
         grammar_feedback = {
             "has_errors": False,
             "errors": [],
@@ -154,7 +205,7 @@ def grammar_check_tool_node(state: AgentState) -> dict:
 
 
 # ──────────────────────────────────────────────
-# Node 3: rag_retrieve_node
+# Node 4: rag_retrieve_node
 # ──────────────────────────────────────────────
 
 def rag_retrieve_node(state: AgentState) -> dict:
@@ -196,7 +247,7 @@ def rag_retrieve_node(state: AgentState) -> dict:
 
 
 # ──────────────────────────────────────────────
-# Node 4: generate_response_node
+# Node 5: generate_response_node
 # ──────────────────────────────────────────────
 
 def generate_response_node(state: AgentState) -> dict:
@@ -208,7 +259,7 @@ def generate_response_node(state: AgentState) -> dict:
       2. 문법 교정 내용 친절히 설명 (오류 있을 때)
       3. 토픽 관련 자연스러운 표현 1~2개 소개
       4. 대화를 이어가는 꼬리 질문 하나
-    반환: final_response
+    반환: final_response, messages(누적)
     """
     llm = _get_llm(temperature=0.7)
 
@@ -271,11 +322,18 @@ def generate_response_node(state: AgentState) -> dict:
         )
     )
 
-    return {"final_response": response.content}
+    # 대화 히스토리 누적
+    messages = state.get("messages", [])
+    new_messages = messages + [
+        {"role": "user", "content": user_input},
+        {"role": "assistant", "content": response.content},
+    ]
+
+    return {"final_response": response.content, "messages": new_messages}
 
 
 # ──────────────────────────────────────────────
-# Node 5: evaluate_response_node
+# Node 6: evaluate_response_node
 # ──────────────────────────────────────────────
 
 def evaluate_response_node(state: AgentState) -> dict:

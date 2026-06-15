@@ -1,9 +1,10 @@
 import os
+from typing import Optional
 
 from dotenv import load_dotenv
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
-from langchain_ollama import OllamaEmbeddings
+from langchain_openai import OpenAIEmbeddings
 
 load_dotenv()
 
@@ -171,28 +172,35 @@ KOREAN_PHRASES: list[Document] = [
     ),
 ]
 
+# ChromaDB 싱글턴 캐시 (프로세스 내 재생성 방지)
+_vector_store: Optional[Chroma] = None
+
 
 def get_vector_store() -> Chroma:
-    """ChromaDB 인스턴스를 반환. 데이터가 없으면 샘플 문서를 초기 로드."""
-    embeddings = OllamaEmbeddings(
-        base_url=os.getenv("OLLAMA_EMBED_BASE_URL", "http://localhost:11434"),
-        model=os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text"),
+    """ChromaDB 인스턴스를 반환. 프로세스 내에서 한 번만 생성."""
+    global _vector_store
+    if _vector_store is not None:
+        return _vector_store
+
+    embeddings = OpenAIEmbeddings(
+        model="text-embedding-3-small",
+        api_key=os.getenv("OPENAI_API_KEY"),
     )
 
     persist_dir = os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
 
-    vector_store = Chroma(
+    _vector_store = Chroma(
         collection_name="korean_phrases",
         embedding_function=embeddings,
         persist_directory=persist_dir,
     )
 
     # 컬렉션이 비어 있을 때만 샘플 데이터 삽입
-    if len(vector_store.get(limit=1)["ids"]) == 0:
+    if len(_vector_store.get(limit=1)["ids"]) == 0:
         print(f"[ChromaDB] 샘플 한국어 표현 {len(KOREAN_PHRASES)}개를 초기 로드합니다...")
-        vector_store.add_documents(KOREAN_PHRASES)
+        _vector_store.add_documents(KOREAN_PHRASES)
 
-    return vector_store
+    return _vector_store
 
 
 def get_retriever(k: int = 3):

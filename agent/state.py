@@ -11,3 +11,5 @@ class AgentState(TypedDict):
     final_response: str    # 튜터가 사용자에게 전달하는 최종 응답
     evaluation_score: int  # 응답 적절성 점수 (1~10, 루프 분기 기준)
     retry_count: int       # rag_retrieve_node 누적 실행 횟수 (무한 루프 방지)
+    messages: list         # 대화 히스토리 누적 ({"role": ..., "content": ...})
+    next_action: str       # LLM이 결정한 다음 노드 이름
