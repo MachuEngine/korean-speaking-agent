@@ -1,111 +1,65 @@
 """
-LangGraph StateGraph 구성 모듈.
+LangGraph Tool 기반 ReAct 에이전트.
 
 그래프 구조:
-  START
-    │
-    ▼
-  analyze_input          ← 토픽·의도 분석
-    │
-    ▼
-  decide_next            ← LLM 판단 라우터
-    │
-    ├─(grammar_check)──► grammar_check ──► rag_retrieve ──► generate_response
-    │                                                              ▲
-    ├─(rag_retrieve)──────────────────────► rag_retrieve ─────────┤
-    │                                                              │
-    └─(generate_response)──────────────────────────────────────────┘
-                                                                   │
-                                                                   ▼
-                                                          evaluate_response
-                                                                   │
-                                              (score >= 7)──► END  │
-                                              (score < 7 & retry < MAX)
-                                                                   │
-                                                          rag_retrieve (루프백)
+  START → agent → (tool_calls 있으면) → tools → agent → ...
+                  (tool_calls 없으면) → END
 """
 
 import os
 
 from dotenv import load_dotenv
-from langgraph.graph import END, START, StateGraph
+from langchain_core.messages import SystemMessage
+from langchain_openai import ChatOpenAI
+from langgraph.graph import START, StateGraph
+from langgraph.prebuilt import ToolNode, tools_condition
 
-from agent.nodes import (
-    analyze_input_node,
-    decide_next_node,
-    evaluate_response_node,
-    generate_response_node,
-    grammar_check_tool_node,
-    rag_retrieve_node,
-)
 from agent.state import AgentState
+from agent.tools import evaluate_response, grammar_check, rag_retrieve
 
 load_dotenv()
 
-def build_graph():
-    """
-    StateGraph를 구성하고 컴파일한 실행 가능한 그래프를 반환.
+SYSTEM_PROMPT = """당신은 친절하고 격려적인 한국어 회화 튜터입니다.
+반드시 한국어로만 답변하세요. 영어, 중국어 등 다른 언어는 절대 사용하지 마세요.
 
-    노드 등록 → 엣지 연결 → 조건부 엣지(라우팅·루프) 설정 → 컴파일
-    """
-    quality_threshold = int(os.getenv("QUALITY_THRESHOLD", "7"))
-    max_retries = int(os.getenv("MAX_RETRIES", "3"))
+사용자의 한국어 입력에 대해 아래 순서로 도구를 사용하세요:
+1. grammar_check — 문법 오류 확인 (단순 인사는 생략 가능)
+2. rag_retrieve — 토픽에 맞는 자연스러운 표현 검색
+3. 수집한 정보를 바탕으로 친절한 튜터 응답 초안 작성
+4. evaluate_response — 초안 품질 평가, 점수 7점 미만이면 개선 후 재평가
+5. 최종 응답 전달
 
-    def _route_after_decide(state: AgentState) -> str:
-        """next_action 값을 읽어 다음 노드를 결정."""
-        return state.get("next_action", "grammar_check")
+최종 응답 형식:
+1. 학습자의 노력을 칭찬하는 한 마디
+2. 문법 교정 설명 (오류가 있을 때만)
+3. 토픽 관련 자연스러운 표현 1~2개 소개
+4. 대화를 이어가는 꼬리 질문 하나
 
-    def _route_after_evaluation(state: AgentState) -> str:
-        """품질 기준을 클로저로 캡처하여 build_graph() 시점의 설정을 사용."""
-        score = state.get("evaluation_score", 0)
-        retry_count = state.get("retry_count", 0)
+말투: 친근한 존댓말 (~해요, ~네요, ~어요)"""
 
-        if score < quality_threshold and retry_count < max_retries:
-            print(
-                f"  [평가] {score}/10점 — 기준 미달, "
-                f"RAG 재검색 ({retry_count}/{max_retries}회차)"
-            )
-            return "retry"
+TOOLS = [grammar_check, rag_retrieve, evaluate_response]
 
-        print(f"  [평가] {score}/10점 — 기준 통과, 응답 완료")
-        return "end"
+
+def build_graph(checkpointer=None):
+    """ReAct 에이전트 그래프를 구성하고 컴파일해서 반환."""
+    llm = ChatOpenAI(
+        api_key=os.getenv("OPENAI_API_KEY"),
+        model=os.getenv("OPENAI_MODEL", "gpt-4o"),
+        temperature=0.7,
+    ).bind_tools(TOOLS)
+
+    def agent_node(state: AgentState) -> dict:
+        """시스템 프롬프트를 앞에 붙여 LLM을 호출한다."""
+        messages = [SystemMessage(content=SYSTEM_PROMPT)] + state["messages"]
+        return {"messages": [llm.invoke(messages)]}
 
     graph = StateGraph(AgentState)
 
-    # ── 노드 등록 ──────────────────────────────────────────────────
-    graph.add_node("analyze_input", analyze_input_node)
-    graph.add_node("decide_next", decide_next_node)
-    graph.add_node("grammar_check", grammar_check_tool_node)
-    graph.add_node("rag_retrieve", rag_retrieve_node)
-    graph.add_node("generate_response", generate_response_node)
-    graph.add_node("evaluate_response", evaluate_response_node)
+    graph.add_node("agent", agent_node)
+    graph.add_node("tools", ToolNode(TOOLS))
 
-    # ── 선형 엣지 ──────────────────────────────────────────────────
-    graph.add_edge(START, "analyze_input")
-    graph.add_edge("analyze_input", "decide_next")
-    graph.add_edge("grammar_check", "rag_retrieve")
-    graph.add_edge("rag_retrieve", "generate_response")
-    graph.add_edge("generate_response", "evaluate_response")
+    graph.add_edge(START, "agent")
+    graph.add_conditional_edges("agent", tools_condition)
+    graph.add_edge("tools", "agent")
 
-    # ── 조건부 엣지: LLM 판단 라우팅 ─────────────────────────────
-    graph.add_conditional_edges(
-        "decide_next",
-        _route_after_decide,
-        {
-            "grammar_check": "grammar_check",
-            "rag_retrieve": "rag_retrieve",
-            "generate_response": "generate_response",
-        },
-    )
-
-    # ── 조건부 엣지: Self-Reflection 루프 ─────────────────────────
-    graph.add_conditional_edges(
-        "evaluate_response",
-        _route_after_evaluation,
-        {
-            "retry": "rag_retrieve",  # 품질 미달 → RAG 재검색
-            "end": END,               # 품질 통과 → 종료
-        },
-    )
-
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)
